@@ -5,12 +5,33 @@ const fs = require('fs');
 const YTDlpWrap = require('yt-dlp-wrap').default;
 const ffmpeg = require('fluent-ffmpeg');
 const sanitize = require('sanitize-filename');
+const { exec } = require('child_process');
 
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Check for required dependencies
+async function checkDependencies() {
+    return new Promise((resolve) => {
+        exec('which yt-dlp ffmpeg', (error) => {
+            if (error) {
+                console.error('Required dependencies are missing. Please ensure yt-dlp and ffmpeg are installed.');
+                resolve(false);
+            } else {
+                console.log('All dependencies are installed.');
+                resolve(true);
+            }
+        });
+    });
+}
+
 // Initialize yt-dlp
-const ytDlp = new YTDlpWrap();
+let ytDlp;
+try {
+    ytDlp = new YTDlpWrap();
+} catch (error) {
+    console.error('Failed to initialize yt-dlp:', error);
+}
 
 // Middleware
 app.use(cors());
@@ -35,6 +56,10 @@ const cleanupTempFiles = (filePath) => {
 // Search endpoint
 app.get('/api/search', async (req, res) => {
     try {
+        if (!ytDlp) {
+            return res.status(500).json({ error: 'Server is not properly configured. Please try again later.' });
+        }
+
         const query = req.query.q;
         if (!query) {
             return res.status(400).json({ error: 'Search query is required' });
@@ -76,6 +101,10 @@ app.get('/api/search', async (req, res) => {
 // Download endpoint
 app.get('/api/download', async (req, res) => {
     try {
+        if (!ytDlp) {
+            return res.status(500).json({ error: 'Server is not properly configured. Please try again later.' });
+        }
+
         const url = req.query.url;
         if (!url) {
             return res.status(400).json({ error: 'URL is required' });
@@ -109,6 +138,16 @@ app.get('/api/download', async (req, res) => {
     }
 });
 
-app.listen(port, () => {
+// Health check endpoint
+app.get('/health', async (req, res) => {
+    const dependenciesOk = await checkDependencies();
+    res.json({
+        status: 'ok',
+        dependencies: dependenciesOk ? 'installed' : 'missing'
+    });
+});
+
+app.listen(port, async () => {
     console.log(`Server running at http://localhost:${port}`);
+    await checkDependencies();
 }); 
