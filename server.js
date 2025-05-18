@@ -10,25 +10,55 @@ const { exec } = require('child_process');
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Set up paths for binaries
+const binPath = path.join(__dirname, 'bin');
+process.env.PATH = `${binPath}:${process.env.PATH}`;
+
 // Check for required dependencies
 async function checkDependencies() {
     return new Promise((resolve) => {
-        exec('which yt-dlp ffmpeg', (error) => {
+        const ytDlpPath = path.join(binPath, 'yt-dlp');
+        const ffmpegPath = path.join(binPath, 'ffmpeg');
+        
+        if (!fs.existsSync(ytDlpPath) || !fs.existsSync(ffmpegPath)) {
+            console.error('Required binaries are missing. Please ensure build script ran successfully.');
+            resolve(false);
+            return;
+        }
+
+        // Make sure binaries are executable
+        try {
+            fs.chmodSync(ytDlpPath, '755');
+            fs.chmodSync(ffmpegPath, '755');
+        } catch (error) {
+            console.error('Failed to set executable permissions:', error);
+        }
+
+        exec(`${ytDlpPath} --version`, (error) => {
             if (error) {
-                console.error('Required dependencies are missing. Please ensure yt-dlp and ffmpeg are installed.');
+                console.error('yt-dlp check failed:', error);
                 resolve(false);
-            } else {
-                console.log('All dependencies are installed.');
-                resolve(true);
+                return;
             }
+
+            exec(`${ffmpegPath} -version`, (error) => {
+                if (error) {
+                    console.error('ffmpeg check failed:', error);
+                    resolve(false);
+                    return;
+                }
+
+                console.log('All dependencies are installed and working.');
+                resolve(true);
+            });
         });
     });
 }
 
-// Initialize yt-dlp
+// Initialize yt-dlp with custom binary path
 let ytDlp;
 try {
-    ytDlp = new YTDlpWrap();
+    ytDlp = new YTDlpWrap(path.join(binPath, 'yt-dlp'));
 } catch (error) {
     console.error('Failed to initialize yt-dlp:', error);
 }
@@ -65,6 +95,8 @@ app.get('/api/search', async (req, res) => {
             return res.status(400).json({ error: 'Search query is required' });
         }
 
+        console.log('Searching for:', query);
+
         const isUrl = query.includes('youtube.com') || query.includes('youtu.be');
         let videoInfo;
 
@@ -78,7 +110,7 @@ app.get('/api/search', async (req, res) => {
                 url: query
             }]);
         } else {
-            // For search terms, we'll simulate a search (in a real app, you'd use YouTube API)
+            // For search terms, we'll simulate a search
             const searchResults = await ytDlp.execPromise([
                 'ytsearch1:' + query,
                 '--dump-json'
@@ -94,7 +126,7 @@ app.get('/api/search', async (req, res) => {
         }
     } catch (error) {
         console.error('Search error:', error);
-        res.status(500).json({ error: 'Failed to search videos' });
+        res.status(500).json({ error: 'Failed to search videos. Please try again.' });
     }
 });
 
@@ -109,6 +141,8 @@ app.get('/api/download', async (req, res) => {
         if (!url) {
             return res.status(400).json({ error: 'URL is required' });
         }
+
+        console.log('Downloading:', url);
 
         const videoInfo = await ytDlp.getVideoInfo(url);
         const sanitizedTitle = sanitize(videoInfo.title);
@@ -134,7 +168,7 @@ app.get('/api/download', async (req, res) => {
         });
     } catch (error) {
         console.error('Download error:', error);
-        res.status(500).json({ error: 'Failed to download video' });
+        res.status(500).json({ error: 'Failed to download video. Please try again.' });
     }
 });
 
@@ -143,7 +177,9 @@ app.get('/health', async (req, res) => {
     const dependenciesOk = await checkDependencies();
     res.json({
         status: 'ok',
-        dependencies: dependenciesOk ? 'installed' : 'missing'
+        dependencies: dependenciesOk ? 'installed' : 'missing',
+        binPath: binPath,
+        path: process.env.PATH
     });
 });
 
