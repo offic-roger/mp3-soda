@@ -20,8 +20,15 @@ async function checkDependencies() {
         const ytDlpPath = path.join(binPath, 'yt-dlp');
         const ffmpegPath = path.join(binPath, 'ffmpeg');
         
+        console.log('Checking dependencies...');
+        console.log('yt-dlp path:', ytDlpPath);
+        console.log('ffmpeg path:', ffmpegPath);
+        console.log('Current PATH:', process.env.PATH);
+        
         if (!fs.existsSync(ytDlpPath) || !fs.existsSync(ffmpegPath)) {
-            console.error('Required binaries are missing. Please ensure build script ran successfully.');
+            console.error('Required binaries are missing:');
+            console.error('yt-dlp exists:', fs.existsSync(ytDlpPath));
+            console.error('ffmpeg exists:', fs.existsSync(ffmpegPath));
             resolve(false);
             return;
         }
@@ -30,24 +37,28 @@ async function checkDependencies() {
         try {
             fs.chmodSync(ytDlpPath, '755');
             fs.chmodSync(ffmpegPath, '755');
+            console.log('Set executable permissions successfully');
         } catch (error) {
             console.error('Failed to set executable permissions:', error);
         }
 
-        exec(`${ytDlpPath} --version`, (error) => {
+        exec(`${ytDlpPath} --version`, (error, stdout, stderr) => {
             if (error) {
                 console.error('yt-dlp check failed:', error);
+                console.error('yt-dlp stderr:', stderr);
                 resolve(false);
                 return;
             }
+            console.log('yt-dlp version:', stdout.trim());
 
-            exec(`${ffmpegPath} -version`, (error) => {
+            exec(`${ffmpegPath} -version`, (error, stdout, stderr) => {
                 if (error) {
                     console.error('ffmpeg check failed:', error);
+                    console.error('ffmpeg stderr:', stderr);
                     resolve(false);
                     return;
                 }
-
+                console.log('ffmpeg version:', stdout.split('\n')[0]);
                 console.log('All dependencies are installed and working.');
                 resolve(true);
             });
@@ -58,7 +69,10 @@ async function checkDependencies() {
 // Initialize yt-dlp with custom binary path
 let ytDlp;
 try {
-    ytDlp = new YTDlpWrap(path.join(binPath, 'yt-dlp'));
+    const ytDlpPath = path.join(binPath, 'yt-dlp');
+    console.log('Initializing yt-dlp with path:', ytDlpPath);
+    ytDlp = new YTDlpWrap(ytDlpPath);
+    console.log('yt-dlp initialized successfully');
 } catch (error) {
     console.error('Failed to initialize yt-dlp:', error);
 }
@@ -87,6 +101,7 @@ const cleanupTempFiles = (filePath) => {
 app.get('/api/search', async (req, res) => {
     try {
         if (!ytDlp) {
+            console.error('yt-dlp not initialized');
             return res.status(500).json({ error: 'Server is not properly configured. Please try again later.' });
         }
 
@@ -96,12 +111,15 @@ app.get('/api/search', async (req, res) => {
         }
 
         console.log('Searching for:', query);
+        console.log('yt-dlp path:', path.join(binPath, 'yt-dlp'));
 
         const isUrl = query.includes('youtube.com') || query.includes('youtu.be');
         let videoInfo;
 
         if (isUrl) {
+            console.log('Processing URL:', query);
             videoInfo = await ytDlp.getVideoInfo(query);
+            console.log('Video info retrieved:', videoInfo.title);
             return res.json([{
                 id: videoInfo.id,
                 title: videoInfo.title,
@@ -110,11 +128,12 @@ app.get('/api/search', async (req, res) => {
                 url: query
             }]);
         } else {
-            // For search terms, we'll simulate a search
+            console.log('Processing search term:', query);
             const searchResults = await ytDlp.execPromise([
                 'ytsearch1:' + query,
                 '--dump-json'
             ]);
+            console.log('Search results received');
             const results = searchResults.split('\n').filter(Boolean).map(JSON.parse);
             return res.json(results.map(video => ({
                 id: video.id,
@@ -125,7 +144,11 @@ app.get('/api/search', async (req, res) => {
             })));
         }
     } catch (error) {
-        console.error('Search error:', error);
+        console.error('Search error details:', {
+            message: error.message,
+            stack: error.stack,
+            code: error.code
+        });
         res.status(500).json({ error: 'Failed to search videos. Please try again.' });
     }
 });
@@ -134,6 +157,7 @@ app.get('/api/search', async (req, res) => {
 app.get('/api/download', async (req, res) => {
     try {
         if (!ytDlp) {
+            console.error('yt-dlp not initialized');
             return res.status(500).json({ error: 'Server is not properly configured. Please try again later.' });
         }
 
@@ -167,7 +191,11 @@ app.get('/api/download', async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('Download error:', error);
+        console.error('Download error details:', {
+            message: error.message,
+            stack: error.stack,
+            code: error.code
+        });
         res.status(500).json({ error: 'Failed to download video. Please try again.' });
     }
 });
@@ -179,7 +207,9 @@ app.get('/health', async (req, res) => {
         status: 'ok',
         dependencies: dependenciesOk ? 'installed' : 'missing',
         binPath: binPath,
-        path: process.env.PATH
+        path: process.env.PATH,
+        ytDlpPath: path.join(binPath, 'yt-dlp'),
+        ffmpegPath: path.join(binPath, 'ffmpeg')
     });
 });
 
