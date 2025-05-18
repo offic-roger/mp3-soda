@@ -99,104 +99,107 @@ const cleanupTempFiles = (filePath) => {
 
 // Search endpoint
 app.get('/api/search', async (req, res) => {
+    const query = req.query.q;
+    if (!query) {
+        return res.status(400).json({ error: 'Query parameter is required' });
+    }
+
     try {
-        if (!ytDlp) {
-            console.error('yt-dlp not initialized');
-            return res.status(500).json({ error: 'Server is not properly configured. Please try again later.' });
-        }
-
-        const query = req.query.q;
-        if (!query) {
-            return res.status(400).json({ error: 'Search query is required' });
-        }
-
+        const ytDlpPath = path.join(binPath, 'yt-dlp');
         console.log('Searching for:', query);
-        console.log('yt-dlp path:', path.join(binPath, 'yt-dlp'));
+        console.log('Using yt-dlp path:', ytDlpPath);
 
-        const isUrl = query.includes('youtube.com') || query.includes('youtu.be');
-        let videoInfo;
+        const searchCommand = `"${ytDlpPath}" ytsearch10:"${query}" --dump-json --no-playlist --no-warnings --no-check-certificate`;
+        console.log('Executing command:', searchCommand);
 
-        if (isUrl) {
-            console.log('Processing URL:', query);
-            videoInfo = await ytDlp.getVideoInfo(query);
-            console.log('Video info retrieved:', videoInfo.title);
-            return res.json([{
-                id: videoInfo.id,
-                title: videoInfo.title,
-                thumbnail: videoInfo.thumbnail,
-                duration: videoInfo.duration,
-                url: query
-            }]);
-        } else {
-            console.log('Processing search term:', query);
-            const searchResults = await ytDlp.execPromise([
-                'ytsearch1:' + query,
-                '--dump-json'
-            ]);
-            console.log('Search results received');
-            const results = searchResults.split('\n').filter(Boolean).map(JSON.parse);
-            return res.json(results.map(video => ({
-                id: video.id,
-                title: video.title,
-                thumbnail: video.thumbnail,
-                duration: video.duration,
-                url: `https://www.youtube.com/watch?v=${video.id}`
-            })));
-        }
-    } catch (error) {
-        console.error('Search error details:', {
-            message: error.message,
-            stack: error.stack,
-            code: error.code
+        exec(searchCommand, (error, stdout, stderr) => {
+            if (error) {
+                console.error('Search error:', error);
+                console.error('stderr:', stderr);
+                return res.status(500).json({ error: 'Failed to search videos', details: error.message });
+            }
+
+            try {
+                const results = stdout.split('\n')
+                    .filter(line => line.trim())
+                    .map(line => {
+                        try {
+                            return JSON.parse(line);
+                        } catch (e) {
+                            console.error('Failed to parse result:', line);
+                            return null;
+                        }
+                    })
+                    .filter(result => result !== null)
+                    .map(video => ({
+                        id: video.id,
+                        title: video.title,
+                        thumbnail: video.thumbnail,
+                        duration: video.duration,
+                        uploader: video.uploader,
+                        view_count: video.view_count
+                    }));
+
+                console.log(`Found ${results.length} results`);
+                res.json(results);
+            } catch (parseError) {
+                console.error('Parse error:', parseError);
+                res.status(500).json({ error: 'Failed to parse search results', details: parseError.message });
+            }
         });
-        res.status(500).json({ error: 'Failed to search videos. Please try again.' });
+    } catch (error) {
+        console.error('Setup error:', error);
+        res.status(500).json({ error: 'Failed to setup search', details: error.message });
     }
 });
 
 // Download endpoint
 app.get('/api/download', async (req, res) => {
+    const videoId = req.query.id;
+    if (!videoId) {
+        return res.status(400).json({ error: 'Video ID is required' });
+    }
+
     try {
-        if (!ytDlp) {
-            console.error('yt-dlp not initialized');
-            return res.status(500).json({ error: 'Server is not properly configured. Please try again later.' });
+        const ytDlpPath = path.join(binPath, 'yt-dlp');
+        const ffmpegPath = path.join(binPath, 'ffmpeg');
+        const outputPath = path.join(tempDir, `${videoId}.mp3`);
+
+        // Create downloads directory if it doesn't exist
+        const downloadsDir = path.join(__dirname, 'downloads');
+        if (!fs.existsSync(downloadsDir)) {
+            fs.mkdirSync(downloadsDir);
         }
 
-        const url = req.query.url;
-        if (!url) {
-            return res.status(400).json({ error: 'URL is required' });
-        }
+        const downloadCommand = `"${ytDlpPath}" -x --audio-format mp3 --audio-quality 0 --ffmpeg-location "${ffmpegPath}" -o "${outputPath}" "https://www.youtube.com/watch?v=${videoId}"`;
+        console.log('Executing command:', downloadCommand);
 
-        console.log('Downloading:', url);
-
-        const videoInfo = await ytDlp.getVideoInfo(url);
-        const sanitizedTitle = sanitize(videoInfo.title);
-        const outputPath = path.join(tempDir, `${sanitizedTitle}.mp3`);
-
-        // Download and convert
-        await ytDlp.execPromise([
-            url,
-            '-x',
-            '--audio-format', 'mp3',
-            '--audio-quality', '0',
-            '-o', outputPath
-        ]);
-
-        // Set up cleanup
-        cleanupTempFiles(outputPath);
-
-        // Send file
-        res.download(outputPath, `${sanitizedTitle}.mp3`, (err) => {
-            if (err) {
-                console.error('Download error:', err);
+        exec(downloadCommand, (error, stdout, stderr) => {
+            if (error) {
+                console.error('Download error:', error);
+                console.error('stderr:', stderr);
+                return res.status(500).json({ error: 'Failed to download video', details: error.message });
             }
+
+            if (!fs.existsSync(outputPath)) {
+                return res.status(500).json({ error: 'Downloaded file not found' });
+            }
+
+            res.download(outputPath, (err) => {
+                if (err) {
+                    console.error('Send file error:', err);
+                }
+                // Clean up the file after sending
+                fs.unlink(outputPath, (unlinkErr) => {
+                    if (unlinkErr) {
+                        console.error('Cleanup error:', unlinkErr);
+                    }
+                });
+            });
         });
     } catch (error) {
-        console.error('Download error details:', {
-            message: error.message,
-            stack: error.stack,
-            code: error.code
-        });
-        res.status(500).json({ error: 'Failed to download video. Please try again.' });
+        console.error('Setup error:', error);
+        res.status(500).json({ error: 'Failed to setup download', details: error.message });
     }
 });
 

@@ -18,6 +18,10 @@ chmod a+rx bin/yt-dlp
 echo "Verifying yt-dlp..."
 ./bin/yt-dlp --version
 
+# Update yt-dlp
+echo "Updating yt-dlp..."
+./bin/yt-dlp -U
+
 # Download FFmpeg static build
 echo "Downloading FFmpeg..."
 curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o ffmpeg.tar.xz
@@ -38,5 +42,9 @@ echo "Current PATH: $PATH"
 # Install Node.js dependencies
 echo "Installing Node.js dependencies..."
 npm install
+
+# Test yt-dlp search
+echo "Testing yt-dlp search..."
+./bin/yt-dlp ytsearch1:"test" --dump-json --no-playlist --no-warnings --no-check-certificate
 
 echo "Build process completed successfully!" 
